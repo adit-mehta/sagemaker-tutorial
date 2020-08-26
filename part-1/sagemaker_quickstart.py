@@ -1,19 +1,11 @@
-import boto3, re, sys, math, json, os, sagemaker, urllib.request
+import boto3, os, sagemaker, urllib.request
 
 from sagemaker import get_execution_role
 from sagemaker.predictor import csv_serializer
 
 import numpy as np
 
-
 import pandas as pd
-
-import matplotlib.pyplot as plt
-
-from IPython.display import Image
-from IPython.display import display
-
-from time import gmtime, strftime
 
 
 # Define IAM role
