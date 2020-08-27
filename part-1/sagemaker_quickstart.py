@@ -58,8 +58,21 @@ boto3.Session().resource('s3').Bucket(bucket_name).Object(os.path.join(prefix, '
 s3_input_train = sagemaker.s3_input(s3_data='s3://{}/{}/train'.format(bucket_name, prefix), content_type='csv')
 
 sess = sagemaker.Session()
-xgb = sagemaker.estimator.Estimator(containers[my_region], role, train_instance_count=1, train_instance_type='ml.m4.xlarge', output_path='s3://{}/{}/output'.format(bucket_name, prefix), sagemaker_session=sess)
-xgb.set_hyperparameters(max_depth=5, eta=0.2, gamma=4, min_child_weight=6, subsample=0.8, silent=0, objective='binary:logistic', num_round=100)
+xgb = sagemaker.estimator.Estimator(containers[my_region],
+                                    role,
+                                    train_instance_count=1,
+                                    train_instance_type='ml.m4.xlarge',
+                                    output_path='s3://{}/{}/output'.format(bucket_name, prefix),
+                                    sagemaker_session=sess)
+
+xgb.set_hyperparameters(max_depth=5,
+                        eta=0.2,
+                        gamma=4,
+                        min_child_weight=6,
+                        subsample=0.8,
+                        silent=0,
+                        objective='binary:logistic',
+                        num_round=100)
 
 
 # Run the model training
