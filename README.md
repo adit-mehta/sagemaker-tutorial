@@ -26,3 +26,5 @@ Part 2 walks users through the process of Hyperparameter Tuning with SageMaker. 
 5. Evaluate the best tuning job's performance
 
 **Note **: The code for Part 2 is taken from the [AWS SageMaker Hyperparamter Tuning Job walkthrough](https://docs.aws.amazon.com/sagemaker/latest/dg/automatic-model-tuning-ex.html)
+
+**Note **: All images in this repository are taken from the [Amazon SageMaker Technical Deep Dive Series](https://www.youtube.com/playlist?list=PLhr1KZpdzukcOr_6j_zmSrvYnLUtgqsZz)
