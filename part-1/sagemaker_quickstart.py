@@ -20,7 +20,7 @@ print("Success - the MySageMakerInstance is in the " + my_region + " region. You
 
 
 # Create an S3 Bucket
-bucket_name = '<YOUR_NAME>-s3-bucket' # <--- PUT YOUR NAME IN LOWER CASE BETWEEN THE <> e.g. adit-s3-bucket
+bucket_name = '<YOUR_NAME>-sagemaker-bucket' # <--- PUT YOUR NAME IN LOWER CASE e.g. adit-sagemaker-bucket
 s3 = boto3.resource('s3')
 try:
     if my_region == 'us-east-1':

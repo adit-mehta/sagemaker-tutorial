@@ -1,149 +1,157 @@
-import pandas as pd
-
-import urllib.request
-
-import numpy as np
-
-import os
+from sagemaker import get_execution_role
+from sagemaker.amazon.amazon_estimator import get_image_uri
 
 import boto3
 
-import sagemaker
-from sagemaker.tuner import HyperparameterTuner
-from sagemaker import AlgorithmEstimator
-from sagemaker.amazon.amazon_estimator import get_image_uri
+import numpy as np                                # For performing matrix operations and numerical processing
 
-from datetime import datetime
+import pandas as pd                               # For manipulating tabular data
 
-
-# Get our data
-try:
-    urllib.request.urlretrieve ("https://archive.ics.uci.edu/ml/machine-learning-databases/00350/default%20of%20credit%20card%20clients.xls", "credit_default.xls")
-    print('Success: Downloaded credit_default.xls')
-except Exception as e:
-    print('Data load error: ', e)
-
-try:
-    data_xls = pd.read_excel('credit_default.xls', 'Data', index_col=None)
-    data_xls.to_csv('data_csv.csv', encoding='utf-8')
-    df = pd.read_csv('data_csv.csv', header=1)
-    print('Success: Data loaded into dataframe')
-except Exception as e:
-    print('Data load error: ', e)
+import os
 
 
-# Let's do some cleaning before training the model
-# Drop columns containing the String  'ID' and '0'
-df = df.drop(['0', 'ID'] , axis='columns')
+# Create SageMaker Session
+region = boto3.Session().region_name
+smclient = boto3.Session().client('sagemaker')
+
+role = get_execution_role()
+print(role)
 
 
-# Split data into test and train
-train_data, val_data, test_data = np.split(df.sample(frac=1, random_state=123), [int(0.8 * len(df)), int(0.9 * len(df))])
-print(train_data.shape, test_data.shape)
+# Set up bucket
+bucket = '<YOUR_NAME>-sagemaker-bucket'        # <--- PUT YOUR NAME IN LOWER CASE e.g. adit-sagemaker-bucket
+prefix = 'sagemaker/DEMO-automatic-model-tuning-xgboost-dm'
 
 
-# Write train, val, and test data to csv and save to directory
-try:
-    os.mkdir(dir_name)
-except:
-    print('Directory ' + dir_name + ' already exists')
-
-pd.concat([train_data['default payment next month'], train_data.drop(['default payment next month'], axis=1)],
-          axis=1).to_csv(dir_name + '/training_data.csv', index=False, header=False)
-
-pd.concat([val_data['default payment next month'], val_data.drop(['default payment next month'], axis=1)],
-          axis=1).to_csv(dir_name + '/validation_data.csv', index=False, header=False)
-
-pd.concat([test_data['default payment next month'], test_data.drop(['default payment next month'], axis=1)],
-          axis=1).to_csv(dir_name + '/test_data.csv', index=False, header=False)
+# Download our data
+!wget -N https://archive.ics.uci.edu/ml/machine-learning-databases/00222/bank-additional.zip
+!unzip -o bank-additional.zip
+data = pd.read_csv('./bank-additional/bank-additional-full.csv', sep=';')
+pd.set_option('display.max_columns', 500)     # Make sure we can see all of the columns
+pd.set_option('display.max_rows', 5)         # Keep the output on one page
 
 
-# Upload data to S3
-bucket = '<YOUR_NAME>-s3-bucket' # <--- PUT YOUR NAME IN LOWER CASE BETWEEN THE <> e.g. adit-s3-bucket
-prefix = 'hyperparameter-data'
-s3 = boto3.resource('s3')
+# Preprocess the data
+data['no_previous_contact'] = np.where(data['pdays'] == 999, 1, 0)                                 # Indicator variable to capture when pdays takes a value of 999
+data['not_working'] = np.where(np.in1d(data['job'], ['student', 'retired', 'unemployed']), 1, 0)   # Indicator for individuals not actively employed
+model_data = pd.get_dummies(data)                                                                  # Convert categorical variables to sets of indicators
+model_data
+model_data = model_data.drop(['duration', 'emp.var.rate', 'cons.price.idx', 'cons.conf.idx', 'euribor3m', 'nr.employed'], axis=1)
 
-#Training Data
-s3.Bucket(bucket).Object(prefix + '/' + 'training_data.csv').upload_file(dir_name + "/training_data.csv")
-s3_training_data = 's3://{}/{}/training_data.csv'.format(bucket, prefix)
-print("s3_trianing_data={}".format(s3_training_data))
+train_data, validation_data, test_data = np.split(model_data.sample(frac=1, random_state=1729), [int(0.7 * len(model_data)), int(0.9*len(model_data))])
 
-#Validation Data
-s3.Bucket(bucket).Object(prefix + '/' + 'validation_data.csv').upload_file(dir_name + "/validation_data.csv")
-s3_validation_data = 's3://{}/{}/validation_data.csv'.format(bucket, prefix)
-print("s3_validation_data={}".format(s3_validation_data))
-
-#Testing Data
-s3.Bucket(bucket).Object(prefix + '/' + 'test_data.csv').upload_file(dir_name + "/test_data.csv")
-s3_testing_data = 's3://{}/{}/test_data.csv'.format(bucket, prefix)
-print("s3_testing_data={}".format(s3_testing_data))
+pd.concat([train_data['y_yes'], train_data.drop(['y_no', 'y_yes'], axis=1)], axis=1).to_csv('train.csv', index=False, header=False)
+pd.concat([validation_data['y_yes'], validation_data.drop(['y_no', 'y_yes'], axis=1)], axis=1).to_csv('validation.csv', index=False, header=False)
+pd.concat([test_data['y_yes'], test_data.drop(['y_no', 'y_yes'], axis=1)], axis=1).to_csv('test.csv', index=False, header=False)
 
 
-# Creating our Estimator
-container = get_image_uri(boto3.Session().region_name, 'linear-learner')
-
-sess = sagemaker.Session()
-
-output_location = 's3://{}/{}/output-training-linearlearner'.format(bucket, prefix)
-print('training artifacts will be uploaded to: {}'.format(output_location))
-
-role = sagemaker.session.get_execution_role(sagemaker_session=None)
-print("role={}".format(role))
-
-linear = sagemaker.estimator.Estimator(container,
-                                       role,
-                                       train_instance_count=1,
-                                       train_instance_type='ml.c4.xlarge',
-                                       output_path=output_location,
-                                       train_use_spot_instances=True,
-                                       train_max_run=1500,
-                                       train_max_wait=2000,
-                                       sagemaker_session=sess,
-                                       tags=[{'Key': 'dataset', 'Value': 'uci_default_of_credit_card_client'},
-                                             {'Key': 'algorithm', 'Value': 'linearlearner'}
-                                             ])
+# Upload the data to S3
+boto3.Session().resource('s3').Bucket(bucket).Object(os.path.join(prefix, 'train/train.csv')).upload_file('train.csv')
+boto3.Session().resource('s3').Bucket(bucket).Object(os.path.join(prefix, 'validation/validation.csv')).upload_file('validation.csv')
 
 
-# Set Hyperparameters
-linear.set_hyperparameters(feature_dim=23,
-                           predictor_type='binary_classifier',  # type of classification problem
-                           learning_rate='auto'
+# Define hyperparameter tuning config
+tuning_job_config = {
+    "ParameterRanges": {
+      "CategoricalParameterRanges": [],
+      "ContinuousParameterRanges": [
+        {
+          "MaxValue": "1",
+          "MinValue": "0",
+          "Name": "eta"
+        },
+        {
+          "MaxValue": "2",
+          "MinValue": "0",
+          "Name": "alpha"
+        },
+        {
+          "MaxValue": "10",
+          "MinValue": "1",
+          "Name": "min_child_weight"
+        }
+      ],
+      "IntegerParameterRanges": [
+        {
+          "MaxValue": "10",
+          "MinValue": "1",
+          "Name": "max_depth"
+        }
+      ]
+    },
+    "ResourceLimits": {
+      "MaxNumberOfTrainingJobs": 3, # <-- You can specify as many jobs to run in total as you wish
+      "MaxParallelTrainingJobs": 3 # <-- You can only run max 3 in parallel
+    },
+    "Strategy": "Bayesian",
+    "HyperParameterTuningJobObjective": {
+      "MetricName": "validation:auc",
+      "Type": "Maximize"
+    }
+  }
 
-                           # These are the hyperparameters that we're going to tune for:
-                           # l1=,
-                           # wd=,
-                           # use_bias=,
-                           # mini_batch_size=
-                           )
 
-param_l1 = sagemaker.parameter.ContinuousParameter(0.0005,
-                                                   0.01,
-                                                   scaling_type='Logarithmic')
+# Create our Tuning Job
+training_image = get_image_uri(boto3.Session().region_name, 'xgboost')
 
-param_wd = sagemaker.parameter.ContinuousParameter(0.0005,
-                                                   0.01,
-                                                   scaling_type='Logarithmic')
+s3_input_train = 's3://{}/{}/train'.format(bucket, prefix)
+s3_input_validation ='s3://{}/{}/validation/'.format(bucket, prefix)
 
-param_use_bias = sagemaker.parameter.CategoricalParameter(['True', 'False'])
+training_job_definition = {
+    "AlgorithmSpecification": {
+      "TrainingImage": training_image,
+      "TrainingInputMode": "File"
+    },
+    "InputDataConfig": [
+      {
+        "ChannelName": "train",
+        "CompressionType": "None",
+        "ContentType": "csv",
+        "DataSource": {
+          "S3DataSource": {
+            "S3DataDistributionType": "FullyReplicated",
+            "S3DataType": "S3Prefix",
+            "S3Uri": s3_input_train
+          }
+        }
+      },
+      {
+        "ChannelName": "validation",
+        "CompressionType": "None",
+        "ContentType": "csv",
+        "DataSource": {
+          "S3DataSource": {
+            "S3DataDistributionType": "FullyReplicated",
+            "S3DataType": "S3Prefix",
+            "S3Uri": s3_input_validation
+          }
+        }
+      }
+    ],
+    "OutputDataConfig": {
+      "S3OutputPath": "s3://{}/{}/output".format(bucket,prefix)
+    },
+    "ResourceConfig": {
+      "InstanceCount": 2,
+      "InstanceType": "ml.c4.2xlarge",
+      "VolumeSizeInGB": 10
+    },
+    "RoleArn": role,
+    "StaticHyperParameters": {
+      "eval_metric": "auc",
+      "num_round": "100",
+      "objective": "binary:logistic",
+      "rate_drop": "0.3",
+      "tweedie_variance_power": "1.4"
+    },
+    "StoppingCondition": {
+      "MaxRuntimeInSeconds": 43200
+    }
+}
 
-param_mini_batch_size = sagemaker.parameter.IntegerParameter(100,
-                                                             600,
-                                                             scaling_type='Linear')
 
-hypertuner = sagemaker.tuner.HyperparameterTuner(linear,
-                                                 objective_metric_name = 'test:binary_classification_accuracy',
-                                                 hyperparameter_ranges = {'l1' : param_l1,
-                                                                          'wd' : param_wd,
-                                                                          'use_bias' : param_use_bias,
-                                                                          'mini_batch_size': param_mini_batch_size},
-                                                 metric_definitions=None,
-                                                 strategy='Bayesian',
-                                                 objective_type='Maximize',
-                                                 max_jobs=20, max_parallel_jobs=3,
-                                                 tags=[{'Key': 'dataset',
-                                                        'Value': 'uci_default_of_credit_card_client'},
-                                                       {'Key': 'algorithm',
-                                                        'Value': 'linearlearner'}],
-                                                 base_tuning_job_name="NoneNone",
-                                                 early_stopping_type='Off')
-
+# Start the tuning job
+tuning_job_name = "AditTuningJob"
+smclient.create_hyper_parameter_tuning_job(HyperParameterTuningJobName = tuning_job_name,
+                                           HyperParameterTuningJobConfig = tuning_job_config,
+                                           TrainingJobDefinition = training_job_definition)
